@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Adjust for your site
+FCM_KEY=""
+AMI_USER=""
+AMI_PASSWORD=""
+
 if [ "$(tty)" = "not a tty" ] && ! ${DEBUG:-false}; then
     # will be in /var/lib/asterisk/push.sh.debug*
     exec 3> ${0##*/}.debug$$
@@ -41,7 +46,7 @@ stacktrace() {
 }
 
 set -E
-trap 'stacktrace "Unchecked error condition at"; { echo "environment:"; env; echo "args: $@"; ls -l /proc/self/fd} >&3; exit 1' ERR
+trap 'stacktrace "Unchecked error condition at"; { echo "environment:"; env; echo "args: $@"; ls -l /proc/self/fd; } >&3; exit 1' ERR
 
 #echo "Asterisk vars:" >&3
 #cat >&3
@@ -159,7 +164,7 @@ ami_start() {
         echo "error, read returned ${PIPESTATUS[0]}"
 	exit 1
     fi
-    ami_send "Action: Login\r\nUsername: <username>\r\nSecret: <password>\r\n"
+    ami_send "Action: Login\r\nUsername: $AMI_USER\r\nSecret: $AMI_PASSWORD\r\n"
     eval "declare -A msg=( $(ami_receive) )"
     echo "Read back:" >&3
     set +x
@@ -203,6 +208,7 @@ get_ip_address() {
         set -x
     done
     echo "Got the AOR" >&3
+    # Contacts: foobar/sip:user@1.7.2.3:58890;transport=tcp;pn-type=firebase;app-id=[redacted];pn-tok=[redacted];pn-timeout=0;pn-silent=1
     addr=$(echo "${msg[Contacts]}" |
         #sed -E -ne "s/$ext\/sip:$ext@\[?([[:xdigit:]\.:]+)\]?:.*(:?;pn-(:?tok|prid)=([^;]+);.*)?/\1 \4/p")
         sed -E -ne "s/$ext\/sip:$ext@\[?([[:xdigit:]\.:]+)\]?:.*;pn-(:?tok|prid)=([^;]+);.*/\1 \3/p")
@@ -244,8 +250,6 @@ agi_msg() {
 }
 
 date || true # how does date return an error?
-
-FCM_KEY=""
 
 send_push() {
     local EXT="$1"
@@ -317,15 +321,17 @@ else
     else
         BRACKETED_IPADDR="$IPADDR"
     fi
-    any_ipaddr_pcre="[?[[:xdigit:]\.:]+\]?"
+    any_ipaddr_pcre="((\d+\.){3}\d+|\[[[:xdigit:]:]+\](%\w+)?)"
     need_push="true"
     opportunistic_push="false"
     if ss -tnp | grep -P "^ESTAB\s+\d+\s+\d+\s+$any_ipaddr_pcre:5060\s+$BRACKETED_IPADDR:\d+\s+" >&3; then
         #echo "$EXT is still connected, no push needed"
-	ping -W 1 -c 1 "$IPADDR" 2>&1 # requires selinux allows 2>&3 >&3
+	if ! ping -W 1 -c 1 "$IPADDR" 2>&1; then # requires selinux allows 2>&3 >&3
+            echo "ping to $IPADDR" failed || true
+        fi
         agi_msg "$EXT was already registered"
         echo $SECONDS >&3
-        echo "$EXT is supposedly still connected, sending a push just in case, but not waiting for the register"
+        echo "$EXT is supposedly still connected, sending a push just in case, but not waiting for the register" || true
         #exit 0
         opportunistic_push="true"
     else
@@ -351,7 +357,7 @@ if $need_push; then
     #waittime=30
     waittime=60
     for host in ${!toks[@]}; do
-        echo "Sending push for $host took:"
+        echo "Sending push for $host took:" || true
         if ! (exec 2>&1; time send_push "$host" "${toks[$host]}"); then
             echo "Push failed for $host"
             date
@@ -367,17 +373,17 @@ if $need_push; then
         #    (( timeout=waittime-SECONDS )) || true
         #    continue
         #fi
-        echo "$(date):"
+        echo "$(date):" || true
         set +x
         date >&3
         for K in "${!msg[@]}"; do
-            echo $K: ${msg[$K]}
+            echo $K: ${msg[$K]} || true
         done
         set -x
         if [[ ${msg[Event]} = ContactStatus* ]]; then
             host="${msg[AOR]}"
 	    if [ "${waiting[$host]}" = 1 ]; then
-	        echo "${host} connected after $SECONDS seconds"
+	        echo "${host} connected after $SECONDS seconds" || true
 	        unset waiting[$host]
 	        if [ ${#waiting[@]} -lt 1 ]; then
 	            #exit 0
@@ -386,18 +392,18 @@ if $need_push; then
 	    fi
         fi
         if [ "$SECONDS" != "$last_SECONDS" ]; then
-            echo -e "waiting for: \c"
+            echo -e "waiting for: \c" || true
             for host in ${!waiting[@]}; do
-                echo -e "$host \c"
+                echo -e "$host \c" || true
             done
-            echo "for $SECONDS seconds"
+            echo "for $SECONDS seconds" || true
         fi
         last_SECONDS=$SECONDS
         (( lines++ )) || true
         (( timeout=waittime-SECONDS )) || true
     done
-    date
-    echo $SECONDS
+    date || true
+    echo $SECONDS || true
     agi_msg "$host registered.  Took $SECONDS seconds to register."
 fi
 
